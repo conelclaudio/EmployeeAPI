@@ -228,8 +228,7 @@ Aprobado! - Con error: 0, Superado: 12, Omitido: 0, Total: 12
 
 ## Consideraciones y limitaciones conocidas
 
-- **Contraseñas en texto plano:** el usuario `admin`/`admin` y cualquier otro usuario se almacenan sin hash. No usar en un ambiente real sin corregir esto primero (ver `ANALISIS_TECNICO.md`).
-- **CORS abierto:** el middleware de autenticación refleja cualquier `Origin` como permitido con `credentials: true`, lo cual es muy permisivo para producción.
+- ~~Contraseñas en texto plano~~ **[Corregido]** las contraseñas ahora se almacenan con hash PBKDF2 + salt (ver sección 8 de `ANALISIS_TECNICO.md` para el detalle de la mejora implementada y su evidencia de validación).- **CORS abierto:** el middleware de autenticación refleja cualquier `Origin` como permitido con `credentials: true`, lo cual es muy permisivo para producción.
 - **`PATCH /api/employee/{id}`** actualiza campos por reflexión y no sincroniza `Department_Id`/`Position_Id` si cambia el nombre del departamento.
 - **Sin paginación:** los listados de empleados y marcaciones devuelven todos los resultados sin límite, lo que puede ser un problema de rendimiento con datasets grandes.
 - **Condición de carrera en el email único:** el controlador valida duplicados antes de insertar, pero si dos solicitudes llegan casi simultáneamente con el mismo email, el índice único de Mongo puede rechazar el insert con una excepción no controlada (`500`) en lugar de un `409`.
