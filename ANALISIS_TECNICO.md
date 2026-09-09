@@ -271,3 +271,45 @@ Ordenados de mayor a menor impacto:
 5. **Sin paginación** en listados — Impacto bajo a corto plazo, alto a largo plazo (rendimiento y uso de memoria con datasets grandes).
 6. **`User.tokenExpiration` mal calculado** — guarda solo el `TimeOfDay` de la expiración (pierde la fecha), por lo que ese campo específico no sirve como expiración real. Impacto bajo porque la validación real del token no depende de este campo (se valida contra el propio JWT), pero es un dato incorrecto persistido en la base.
 7. **Secretos de desarrollo en `appsettings.json`** — el JWT secret está en el repositorio (aunque marcado como "dev-only"). Impacto bajo si se respeta la convención, pero riesgoso si alguien lo reutiliza en otro ambiente por descuido.
+
+## 8. Mejora implementada: hash de contraseñas con salt (PBKDF2)
+
+### Problema
+
+Las contraseñas de usuario (incluida la del `admin` sembrado automáticamente) se almacenaban y comparaban en texto plano en `AuthController.cs`. Cualquier acceso de lectura a la base de datos, o un backup filtrado, exponía las credenciales de todos los usuarios directamente. Es el riesgo #1 identificado en la sección 7.
+
+### Decisión técnica tomada
+
+Se implementó hashing de contraseñas usando **PBKDF2** (`Rfc2898DeriveBytes`), con salt aleatorio de 128 bits por usuario y 100.000 iteraciones (recomendación vigente de OWASP para PBKDF2-SHA256). Se eligió PBKDF2 en lugar de BCrypt o Argon2 porque viene incluido en `System.Security.Cryptography` del propio .NET, sin necesidad de agregar ninguna dependencia NuGet nueva — algo relevante dado el alcance acotado de esta mejora.
+
+El campo `password` de `User` no cambió de nombre ni de tipo (sigue siendo un `string`), pero ahora almacena `"{iteraciones}.{saltBase64}.{hashBase64}"` en lugar del texto plano. Guardar las iteraciones junto con el hash permite subir ese número en el futuro sin invalidar los hashes ya generados.
+
+La comparación en `Verify` usa `CryptographicOperations.FixedTimeEquals` (tiempo constante) en vez de `==`, para no filtrar información por timing attacks.
+
+### Archivos modificados
+
+| Archivo | Tipo de cambio |
+|---|---|
+| `Models/PasswordHasher.cs` | Nuevo — contiene `Hash()` y `Verify()`. |
+| `Models/User.cs` | Modificado — se documentó que `password` ahora almacena un hash, no texto plano. |
+| `Controllers/AuthController.cs` | Modificado — el seed del usuario `admin` ahora usa `PasswordHasher.Hash()`, y el login usa `PasswordHasher.Verify()` en vez de `==`. |
+| `Tests/PasswordHasherTests.cs` | Nuevo — 5 pruebas del hasher (ver evidencia abajo). |
+
+### Riesgos y efectos secundarios considerados
+
+- **Usuarios existentes con contraseña antigua en texto plano quedan bloqueados.** Como el seed automático de `admin` solo se ejecuta si la colección `user` está vacía, una base ya poblada antes de este cambio no se migra sola. `PasswordHasher.Verify` devuelve `false` (no lanza excepción) ante un valor con formato inesperado, así que el efecto es un `401` normal, no un error 500 — pero el usuario no puede loguearse hasta que se le regenere el hash. **Quedó fuera de alcance** un script de migración automática; para esta entrega, la solución fue limpiar el volumen de Mongo (`docker compose down -v`) antes de probar.
+- **Sin cambio de contrato público:** `POST /api/auth/login` sigue recibiendo y devolviendo exactamente lo mismo (`username`/`password` en el body, `{username, token, expiresAtUtc}` en la respuesta). Ningún consumidor de la API se ve afectado.
+- **Costo de CPU por login:** 100.000 iteraciones de PBKDF2 añaden unos pocos milisegundos por intento de login. Es el costo esperado y deseado de un hash lento (dificulta ataques de fuerza bruta); no es perceptible para un usuario real.
+
+### Evidencia de validación
+
+1. **Tests automatizados:** `dotnet test Tests/EmployeeAPI.Tests.csproj` → `Superado: 17, Con error: 0` (los 12 tests originales + 5 nuevos de `PasswordHasherTests`, que cubren: verificación correcta, contraseña incorrecta, salts distintos entre hashes de la misma contraseña, que el hash nunca contiene la contraseña en texto plano, y que un valor con formato legado/inválido no rompe la verificación).
+2. **Prueba manual end-to-end:** tras `docker compose down -v && docker compose up --build` (base limpia), `POST /api/auth/login` con `{"username":"admin","password":"admin"}` respondió `200` con un JWT válido — el comportamiento externo es idéntico al de antes del cambio.
+3. **Inspección directa en Mongo Express:** el documento del usuario `admin` en la colección `user` muestra el campo `password` como `100000.HSLK5YYNkLDggBtVidpN8g==.TS826cTqPl/ehTow8...` en lugar de `"admin"` — confirma que el texto plano ya no se persiste.
+
+## 9. Decisiones técnicas y pendientes
+
+- Se priorizó PBKDF2 sobre BCrypt/Argon2 por no requerir dependencias externas nuevas, dado el alcance acotado de esta entrega.
+- **Pendiente:** migración de usuarios con contraseñas antiguas en texto plano (actualmente requiere recrear el usuario o la base). En un entorno real se agregaría un script de migración único, o un mecanismo transicional de "rehash en el siguiente login exitoso con texto plano".
+- **Pendiente:** el resto de riesgos de la sección 7 (CORS abierto, `PATCH` inconsistente, falta de paginación, condición de carrera en email único, timezone en marcaciones) no se abordaron en esta entrega — el challenge permite explícitamente elegir una sola mejora acotada en lugar de cubrir todas las recomendaciones.
+- **Pendiente:** la interfaz web opcional (punto 5 del challenge) no se implementó, por priorizar los entregables obligatorios dentro del tiempo disponible.
