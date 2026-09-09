@@ -56,4 +56,28 @@ public class TokenTests
 
         Assert.InRange(expiration, DateTime.UtcNow.AddHours(2.9), DateTime.UtcNow.AddHours(3.1));
     }
+
+    [Fact]
+    public void GenerateToken_SetsTokenExpirationAsFullDateTime_NotJustTimeOfDay()
+    {
+        var user = new User { username = "admin", password = "admin" };
+
+        var result = Tools.generateSecurityTokenDescriptor(SecretKey, user, expirationHours: 12);
+
+        // Antes del fix, tokenExpiration era un TimeSpan derivado de TimeOfDay (perdia la fecha).
+        // Ahora debe caer en un rango de fecha/hora real, ~12 horas en el futuro.
+        Assert.InRange(result.tokenExpiration, DateTime.UtcNow.AddHours(11.9), DateTime.UtcNow.AddHours(12.1));
+    }
+
+    [Fact]
+    public void GenerateToken_TokenExpirationMatchesJwtExpiration()
+    {
+        var user = new User { username = "admin", password = "admin" };
+
+        var result = Tools.generateSecurityTokenDescriptor(SecretKey, user, expirationHours: 5);
+        var jwtExpiration = Tools.GetExpirationUtc(result.token!);
+
+        // tokenExpiration (persistido en el usuario) debe coincidir con lo que realmente dice el JWT.
+        Assert.True(Math.Abs((jwtExpiration - result.tokenExpiration).TotalSeconds) < 1);
+    }
 }

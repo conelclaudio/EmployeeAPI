@@ -23,8 +23,8 @@ namespace EmployeeAPI.Models
             };
             var token = tokenHandler.CreateToken(tokenDescriptor);
             userFind.token = tokenHandler.WriteToken(token);
-            //agrego el timespan de expiracion
-            userFind.tokenExpiration = tokenDescriptor.Expires.Value.TimeOfDay;
+            //guardo la fecha y hora completas de expiracion (antes se guardaba solo el TimeOfDay, perdiendo la fecha)
+            userFind.tokenExpiration = tokenDescriptor.Expires.Value;
             return userFind;
         }
         static public bool IsTokenValid(string token, string secretKey)

@@ -270,16 +270,18 @@ Ordenados de mayor a menor impacto:
 3. **`PATCH` de empleados inconsistente** con `Department_Id`/`Position_Id` — Impacto medio. Genera datos inconsistentes silenciosamente.
 4. **Excepción no controlada en índice único de email** (condición de carrera → `500` en vez de `409`) — Impacto bajo-medio. Solo se manifiesta con requests concurrentes casi simultáneas.
 5. **Sin paginación** en listados — Impacto bajo a corto plazo, alto a largo plazo (rendimiento y uso de memoria con datasets grandes).
-6. **`User.tokenExpiration` mal calculado** — guarda solo el `TimeOfDay` de la expiración (pierde la fecha), por lo que ese campo específico no sirve como expiración real. Impacto bajo porque la validación real del token no depende de este campo (se valida contra el propio JWT), pero es un dato incorrecto persistido en la base.
+6. ~~`User.tokenExpiration` mal calculado~~ **[Corregido, ver sección 8.2]** — guardaba solo el `TimeOfDay` de la expiración (perdía la fecha), por lo que ese campo específico no servía como expiración real (antes de la mejora). Impacto bajo porque la validación real del token nunca dependió de este campo (se valida contra el propio JWT), pero era un dato incorrecto persistido en la base.
 7. **Secretos de desarrollo en `appsettings.json`** — el JWT secret está en el repositorio (aunque marcado como "dev-only"). Impacto bajo si se respeta la convención, pero riesgoso si alguien lo reutiliza en otro ambiente por descuido.
 
-## 8. Mejora implementada: hash de contraseñas con salt (PBKDF2)
+## 8. Mejoras implementadas
 
-### Problema
+### 8.1 Hash de contraseñas con salt (PBKDF2)
+
+**Problema**
 
 Las contraseñas de usuario (incluida la del `admin` sembrado automáticamente) se almacenaban y comparaban en texto plano en `AuthController.cs`. Cualquier acceso de lectura a la base de datos, o un backup filtrado, exponía las credenciales de todos los usuarios directamente. Es el riesgo #1 identificado en la sección 7.
 
-### Decisión técnica tomada
+#### Decisión técnica tomada
 
 Se implementó hashing de contraseñas usando **PBKDF2** (`Rfc2898DeriveBytes`), con salt aleatorio de 128 bits por usuario y 100.000 iteraciones (recomendación vigente de OWASP para PBKDF2-SHA256). Se eligió PBKDF2 en lugar de BCrypt o Argon2 porque viene incluido en `System.Security.Cryptography` del propio .NET, sin necesidad de agregar ninguna dependencia NuGet nueva — algo relevante dado el alcance acotado de esta mejora.
 
@@ -287,7 +289,7 @@ El campo `password` de `User` no cambió de nombre ni de tipo (sigue siendo un `
 
 La comparación en `Verify` usa `CryptographicOperations.FixedTimeEquals` (tiempo constante) en vez de `==`, para no filtrar información por timing attacks.
 
-### Archivos modificados
+#### Archivos modificados
 
 | Archivo | Tipo de cambio |
 |---|---|
@@ -296,21 +298,55 @@ La comparación en `Verify` usa `CryptographicOperations.FixedTimeEquals` (tiemp
 | `Controllers/AuthController.cs` | Modificado — el seed del usuario `admin` ahora usa `PasswordHasher.Hash()`, y el login usa `PasswordHasher.Verify()` en vez de `==`. |
 | `Tests/PasswordHasherTests.cs` | Nuevo — 5 pruebas del hasher (ver evidencia abajo). |
 
-### Riesgos y efectos secundarios considerados
+#### Riesgos y efectos secundarios considerados
 
 - **Usuarios existentes con contraseña antigua en texto plano quedan bloqueados.** Como el seed automático de `admin` solo se ejecuta si la colección `user` está vacía, una base ya poblada antes de este cambio no se migra sola. `PasswordHasher.Verify` devuelve `false` (no lanza excepción) ante un valor con formato inesperado, así que el efecto es un `401` normal, no un error 500 — pero el usuario no puede loguearse hasta que se le regenere el hash. **Quedó fuera de alcance** un script de migración automática; para esta entrega, la solución fue limpiar el volumen de Mongo (`docker compose down -v`) antes de probar.
 - **Sin cambio de contrato público:** `POST /api/auth/login` sigue recibiendo y devolviendo exactamente lo mismo (`username`/`password` en el body, `{username, token, expiresAtUtc}` en la respuesta). Ningún consumidor de la API se ve afectado.
 - **Costo de CPU por login:** 100.000 iteraciones de PBKDF2 añaden unos pocos milisegundos por intento de login. Es el costo esperado y deseado de un hash lento (dificulta ataques de fuerza bruta); no es perceptible para un usuario real.
 
-### Evidencia de validación
+#### Evidencia de validación
 
 1. **Tests automatizados:** `dotnet test Tests/EmployeeAPI.Tests.csproj` → `Superado: 17, Con error: 0` (los 12 tests originales + 5 nuevos de `PasswordHasherTests`, que cubren: verificación correcta, contraseña incorrecta, salts distintos entre hashes de la misma contraseña, que el hash nunca contiene la contraseña en texto plano, y que un valor con formato legado/inválido no rompe la verificación).
 2. **Prueba manual end-to-end:** tras `docker compose down -v && docker compose up --build` (base limpia), `POST /api/auth/login` con `{"username":"admin","password":"admin"}` respondió `200` con un JWT válido — el comportamiento externo es idéntico al de antes del cambio.
 3. **Inspección directa en Mongo Express:** el documento del usuario `admin` en la colección `user` muestra el campo `password` como `100000.HSLK5YYNkLDggBtVidpN8g==.TS826cTqPl/ehTow8...` en lugar de `"admin"` — confirma que el texto plano ya no se persiste.
 
+### 8.2 Corrección del campo `tokenExpiration` (perdía la fecha)
+
+**Problema**
+
+`User.tokenExpiration` se declaraba como `TimeSpan`, y `Tools.generateSecurityTokenDescriptor` lo llenaba con `tokenDescriptor.Expires.Value.TimeOfDay` — es decir, solo la hora del día (`HH:mm:ss`) en que expira el token, descartando por completo la fecha. Es el riesgo #6 identificado en la sección 7 (la pista explícita del challenge). Un valor como "14:30:00" no permite saber si el token expiró hoy, ayer, o dentro de un año.
+
+#### Decisión técnica tomada
+
+Se cambió el tipo de `User.tokenExpiration` de `TimeSpan` a `DateTime`, y en `Tools.cs` ahora se asigna `tokenDescriptor.Expires.Value` completo (fecha y hora UTC), en vez de solo `.TimeOfDay`. No se renombró el campo ni se tocó su lugar en el modelo, para mantener el cambio acotado: la corrección es de **tipo y valor**, no de diseño.
+
+Se verificó primero que ningún otro archivo del proyecto (controladores, servicios, tests existentes) leyera este campo — solo se escribía en `Tools.cs` y se declaraba en `User.cs`. Esto confirma que era un dato persistido pero nunca consumido: la validación real de expiración del token siempre se hizo contra el propio JWT (`Tools.IsTokenValid`, `Tools.GetExpirationUtc`), no contra este campo.
+
+#### Archivos modificados
+
+| Archivo | Tipo de cambio |
+|---|---|
+| `Models/User.cs` | Modificado — `tokenExpiration` cambia de `TimeSpan` a `DateTime`. |
+| `Models/Tools.cs` | Modificado — se asigna la fecha y hora completas de expiración, no solo `TimeOfDay`. |
+| `Tests/TokenTests.cs` | Se agregaron 2 pruebas nuevas (ver evidencia abajo). |
+
+#### Riesgos y efectos secundarios considerados
+
+- **Documentos existentes en Mongo con el valor viejo (`TimeSpan`) podrían fallar al deserializarse** como `DateTime` la próxima vez que se lea ese usuario (por ejemplo, en el login). Es el mismo tipo de riesgo que ya vimos con la migración de contraseñas: una base poblada *antes* de este cambio no es 100% compatible con el nuevo tipo de dato. **Mitigación aplicada para esta entrega:** se validó con una base limpia (`docker compose down -v`), igual que con la mejora anterior. En un entorno real, correspondería un script de migración o una estrategia de deserialización tolerante a valores antiguos.
+- **Sin cambio de contrato público:** este campo nunca se expuso en ninguna respuesta de la API (`LoginResponse` solo expone `username`, `token`, `expiresAtUtc`), así que ningún cliente externo se ve afectado.
+- **Impacto funcional nulo, impacto de corrección de datos alto:** como el campo no se usaba para ninguna decisión de negocio, este fix no cambia el comportamiento observable de la API — solo corrige un dato persistido que antes era incorrecto por diseño.
+
+#### Evidencia de validación
+
+1. **Tests automatizados:** se agregaron 2 pruebas a `TokenTests.cs`: una confirma que `tokenExpiration` cae en el rango de fecha/hora real esperado (no en un rango de 24 horas sin fecha), y otra confirma que coincide (con menos de 1 segundo de diferencia) con la expiración real leída desde el propio JWT vía `Tools.GetExpirationUtc`.
+2. **Suite completa:** `dotnet test Tests/EmployeeAPI.Tests.csproj` → todas las pruebas (las 17 anteriores + las 2 nuevas, 19 en total) en verde.
+3. **Prueba manual end-to-end:** tras `docker compose down -v && docker compose up --build` (base limpia), `POST /api/auth/login` respondió `200` con `"expiresAtUtc": "2026-09-10T11:45:49Z"`. Al inspeccionar el mismo usuario en Mongo Express, el campo `tokenExpiration` mostró `Thu Sep 10 2026 11:45:49 GMT+0000` — una fecha completa (día, mes, año y hora) que coincide exactamente con la expiración real del JWT, en vez de un valor de solo horas sin fecha como antes del fix.
+
 ## 9. Decisiones técnicas y pendientes
 
 - Se priorizó PBKDF2 sobre BCrypt/Argon2 por no requerir dependencias externas nuevas, dado el alcance acotado de esta entrega.
+- **Se implementó una segunda mejora (sección 8.2) además de la mínima requerida**, ya que el tiempo disponible lo permitió y el challenge valora la calidad sobre la cantidad, no la cantidad mínima estricta. Se priorizó `tokenExpiration` sobre otras candidatas (CORS, PATCH, paginación) porque es la única que el propio challenge señala explícitamente como "buen candidato a corrección", y porque se pudo verificar con confianza que ningún otro código dependía del valor viejo antes de cambiarlo — el mismo nivel de cuidado que la primera mejora, no una adición apurada.
 - **Pendiente:** migración de usuarios con contraseñas antiguas en texto plano (actualmente requiere recrear el usuario o la base). En un entorno real se agregaría un script de migración único, o un mecanismo transicional de "rehash en el siguiente login exitoso con texto plano".
-- **Pendiente:** el resto de riesgos de la sección 7 (CORS abierto, `PATCH` inconsistente, falta de paginación, condición de carrera en email único, timezone en marcaciones) no se abordaron en esta entrega — el challenge permite explícitamente elegir una sola mejora acotada en lugar de cubrir todas las recomendaciones.
+- **Pendiente:** documentos de `user` guardados en Mongo *antes* de la corrección de `tokenExpiration` (sección 8.2) quedan con un valor de tipo incompatible (`TimeSpan` en vez de `DateTime`); requieren una base limpia o una migración, igual que el punto anterior.
+- **Pendiente:** el resto de riesgos de la sección 7 (CORS abierto, `PATCH` inconsistente, falta de paginación, condición de carrera en email único, timezone en marcaciones) no se abordaron en esta entrega — el challenge permite explícitamente elegir mejoras acotadas en lugar de cubrir todas las recomendaciones.
 - **Interfaz web opcional (punto 5):** se implementó en `frontend/` (HTML/CSS/JS vanilla, sin build). Se estructuró en capas siguiendo el principio de dependencia de Clean Architecture — `api-client.js` (infraestructura) y `session.js` (dominio) no importan `view.js` (presentación) ni entre sí; solo `app.js` (orquestación) conoce a las tres. Esto se aplicó únicamente al frontend, código nuevo sin restricciones de la actividad C; el backend existente no se reestructuró a Clean Architecture, ya que eso habría significado una reescritura grande, incoherente con la restricción de "cambios pequeños, trazables y coherentes con la arquitectura actual" del challenge.

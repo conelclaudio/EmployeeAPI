@@ -218,7 +218,7 @@ curl "http://localhost:8080/api/punch?employeeId=66df0a1b2c3d4e5f60718294" \
 
 ## Pruebas automatizadas
 
-El repositorio incluye un proyecto xUnit en `Tests/` con 17 pruebas que cubren: generación y validación de tokens JWT, validaciones de modelos (`Punch`, `Enrollment`, `Device`), que la respuesta de login no exponga la contraseña, y el hasher de contraseñas (`PasswordHasher`: verificación correcta, contraseña incorrecta, salts distintos por hash, que el hash nunca contiene la contraseña en texto plano, y manejo de valores con formato inválido/legado). No requieren conexión a MongoDB.
+El repositorio incluye un proyecto xUnit en `Tests/` con 19 pruebas que cubren: generación y validación de tokens JWT (incluyendo que `tokenExpiration` ahora guarda la fecha completa, no solo la hora del día), validaciones de modelos (`Punch`, `Enrollment`, `Device`), que la respuesta de login no exponga la contraseña, y el hasher de contraseñas (`PasswordHasher`: verificación correcta, contraseña incorrecta, salts distintos por hash, que el hash nunca contiene la contraseña en texto plano, y manejo de valores con formato inválido/legado). No requieren conexión a MongoDB.
 
 ```bash
 dotnet test Tests/EmployeeAPI.Tests.csproj
@@ -226,7 +226,7 @@ dotnet test Tests/EmployeeAPI.Tests.csproj
 
 Resultado esperado:
 ```
-Aprobado! - Con error: 0, Superado: 17, Omitido: 0, Total: 17
+Aprobado! - Con error: 0, Superado: 19, Omitido: 0, Total: 19
 ```
 
 ## Interfaz web (opcional)
