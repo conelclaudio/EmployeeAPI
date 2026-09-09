@@ -1,0 +1,181 @@
+:root {
+    --ink: #16221f;
+    --ink-soft: #45534f;
+    --paper: #f5f6f3;
+    --panel: #ffffff;
+    --line: #d9ddd7;
+    --amber: #c98a2b;
+    --amber-deep: #9c6a1c;
+    --clay: #b3492e;
+    --sage: #4c7a6f;
+    --focus: #2f6f8f;
+    font-size: 16px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    line-height: 1.45;
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    padding: 1.1rem 1.5rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+
+  .brand__mark {
+    font-family: 'Fraunces', serif;
+    font-size: 1.4rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .brand__mark span { color: var(--amber-deep); }
+
+  .brand__tag {
+    font-size: 0.82rem;
+    color: var(--ink-soft);
+  }
+
+  .brand__session {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+  }
+
+  .app {
+    display: none;
+    grid-template-columns: 300px 1fr;
+    gap: 1.25rem;
+    max-width: 1180px;
+    margin: 1.5rem auto;
+    padding: 0 1.5rem;
+  }
+
+  .app.is-active { display: grid; }
+
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; margin: 1rem auto; }
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+  }
+
+  .panel__header {
+    padding: 0.9rem 1.1rem;
+    border-bottom: 1px solid var(--line);
+    font-family: 'Fraunces', serif;
+    font-size: 1.05rem;
+    font-weight: 600;
+  }
+
+  .panel__body { padding: 1.1rem; }
+
+  .field { margin-bottom: 0.9rem; }
+
+  .field label {
+    display: block;
+    font-size: 0.8rem;
+    color: var(--ink-soft);
+    margin-bottom: 0.3rem;
+  }
+
+  .field input, .field select {
+    width: 100%;
+    padding: 0.55rem 0.6rem;
+    border: 1px solid var(--line);
+    background: var(--paper);
+    font-family: inherit;
+    font-size: 0.92rem;
+    color: var(--ink);
+  }
+
+  .field input:focus, .field select:focus, button:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+
+  .btn {
+    width: 100%;
+    padding: 0.6rem 0.9rem;
+    border: none;
+    background: var(--amber);
+    color: #ffffff;
+    font-family: inherit;
+    font-size: 0.92rem;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .btn:hover { background: var(--amber-deep); }
+  .btn:disabled { background: #cbb896; cursor: not-allowed; }
+
+  .btn--ghost {
+    width: auto;
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--ink-soft);
+    padding: 0.4rem 0.8rem;
+    font-size: 0.82rem;
+  }
+
+  .btn--ghost:hover { background: var(--paper); color: var(--ink); }
+
+  .filters-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+  }
+
+  .banner {
+    padding: 0.6rem 0.8rem;
+    font-size: 0.86rem;
+    margin-bottom: 0.9rem;
+    border-left: 3px solid transparent;
+  }
+
+  .banner--error { background: #fbeae5; border-color: var(--clay); color: #7a2c19; }
+  .banner--loading { background: #eef2ef; border-color: var(--sage); color: #2f4b43; }
+  .banner--empty { background: var(--paper); border-color: var(--line); color: var(--ink-soft); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  th, td { text-align: left; padding: 0.55rem 0.6rem; border-bottom: 1px solid var(--line); }
+  th { font-weight: 500; color: var(--ink-soft); font-size: 0.78rem; text-transform: none; }
+  td.mono, th.mono { font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; }
+  tbody tr:hover { background: var(--paper); }
+
+  .tabs { display: flex; gap: 0.4rem; margin-bottom: 1rem; }
+  .tab {
+    padding: 0.45rem 0.9rem;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink-soft);
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .tab.is-active { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+  .login-wrap {
+    max-width: 380px;
+    margin: 4.5rem auto;
+    padding: 0 1.5rem;
+  }
+
+  .login-wrap .panel__header { font-size: 1.2rem; }
+
+  .hint { font-size: 0.78rem; color: var(--ink-soft); margin-top: 0.3rem; }
+
+  .table-scroll { overflow-x: auto; }

@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GoodRabbit — Timekeeper</title>
+<!--
+  Interfaz opcional (punto 5 del challenge) para consumir EmployeeAPI.
+  Sin build/npm: HTML + CSS + JS vanilla con módulos ES6 nativos, separado en capas:
+
+  - api-client.js  → infraestructura: solo sabe hacer fetch a EmployeeAPI.
+  - session.js     → dominio: qué es una sesión válida y dónde vive (sessionStorage).
+  - view.js        → presentación: solo lee/escribe el DOM, recibe datos ya resueltos.
+  - app.js         → orquestación: la única capa que conoce a las tres anteriores.
+
+  Las capas de abajo nunca importan a las de arriba (api-client.js no sabe que
+  existe view.js, por ejemplo) — esa es la regla de dependencia que se respeta.
+
+  Decisiones de manejo del token (ver session.js):
+  - Se guarda en sessionStorage (no localStorage): desaparece al cerrar la pestaña/navegador,
+    reduce la ventana de exposición si el equipo es compartido.
+  - Nunca se manda por querystring, solo por header Authorization.
+  - Si una llamada responde 401, se limpia la sesión local y se vuelve a mostrar el login,
+    en vez de dejar al usuario "atascado" con un token inválido.
+  - La fecha de expiración (expiresAtUtc) se revisa en el cliente antes de cada acción para
+    avisar proactivamente, sin esperar a que el servidor la rechace.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header class="brand">
+    <span class="brand__mark">Good<span>Rabbit</span></span>
+    <span class="brand__tag">Timekeeper console</span>
+    <div class="brand__session" id="sessionInfo"></div>
+  </header>
+
+  <!-- LOGIN -->
+  <div class="login-wrap" id="loginView">
+    <div class="panel">
+      <div class="panel__header">Iniciar sesión</div>
+      <div class="panel__body">
+        <div id="loginBanner"></div>
+        <form id="loginForm">
+          <div class="field">
+            <label for="apiBase">URL de la API</label>
+            <input id="apiBase" type="text" value="http://localhost:8080" />
+            <div class="hint">Docker Compose: puerto 8080 · dotnet run local: puerto 5146</div>
+          </div>
+          <div class="field">
+            <label for="username">Usuario</label>
+            <input id="username" type="text" autocomplete="username" value="admin" required />
+          </div>
+          <div class="field">
+            <label for="password">Contraseña</label>
+            <input id="password" type="password" autocomplete="current-password" value="admin" required />
+          </div>
+          <button class="btn" type="submit" id="loginBtn">Iniciar sesión</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- APP -->
+  <div class="app" id="appView">
+    <aside class="panel">
+      <div class="panel__header">Filtros</div>
+      <div class="panel__body">
+        <div class="tabs">
+          <button class="tab is-active" data-tab="employees" id="tabEmployeesBtn">Empleados</button>
+          <button class="tab" data-tab="punches" id="tabPunchesBtn">Marcaciones</button>
+        </div>
+
+        <div id="employeeFilters">
+          <div class="field">
+            <label for="searchEmployee">Buscar</label>
+            <input id="searchEmployee" type="text" placeholder="Nombre, email o DNI" />
+          </div>
+          <div class="field">
+            <label for="filterDepartment">Departamento</label>
+            <select id="filterDepartment"><option value="">Todos</option></select>
+          </div>
+          <div class="field">
+            <label for="filterPosition">Posición</label>
+            <select id="filterPosition"><option value="">Todas</option></select>
+          </div>
+        </div>
+
+        <div id="punchFilters" style="display:none;">
+          <div class="field">
+            <label for="filterEmployee">Empleado</label>
+            <select id="filterEmployee"><option value="">Todos</option></select>
+          </div>
+          <div class="field">
+            <label for="filterDevice">Dispositivo</label>
+            <select id="filterDevice"><option value="">Todos</option></select>
+          </div>
+          <div class="field">
+            <label for="filterPunchType">Tipo de marca</label>
+            <select id="filterPunchType"><option value="">Todos</option></select>
+          </div>
+          <div class="filters-row">
+            <div class="field">
+              <label for="filterFrom">Desde</label>
+              <input id="filterFrom" type="date" />
+            </div>
+            <div class="field">
+              <label for="filterTo">Hasta</label>
+              <input id="filterTo" type="date" />
+            </div>
+          </div>
+        </div>
+
+        <button class="btn--ghost" id="logoutBtn" type="button">Cerrar sesión</button>
+      </div>
+    </aside>
+
+    <main class="panel">
+      <div class="panel__header" id="resultsTitle">Empleados</div>
+      <div class="panel__body">
+        <div id="resultsBanner"></div>
+        <div class="table-scroll">
+          <table id="resultsTable">
+            <thead id="resultsHead"></thead>
+            <tbody id="resultsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
