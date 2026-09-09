@@ -1,6 +1,87 @@
-@EmployeeAPI_HostAddress = http://localhost:5146
+@EmployeeAPI_HostAddress = http://localhost:8080
 
-GET {{EmployeeAPI_HostAddress}}/weatherforecast/
-Accept: application/json
+### 1. Login (obtiene el token usado en todas las llamadas siguientes)
+# @name login
+POST {{EmployeeAPI_HostAddress}}/api/auth/login
+Content-Type: application/json
 
-###
+{
+  "username": "admin",
+  "password": "admin"
+}
+
+@token = {{login.response.body.$.token}}
+
+### 2. Health check (no requiere token)
+GET {{EmployeeAPI_HostAddress}}/health
+
+### 3. Crear un dispositivo
+# @name createDevice
+POST {{EmployeeAPI_HostAddress}}/api/device
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "Reloj Recepcion",
+  "location": "Casa Matriz",
+  "timezone": "America/Santiago"
+}
+
+### 4. Crear un empleado (crea Departamento/Posición implícitamente si no existen)
+# @name createEmployee
+POST {{EmployeeAPI_HostAddress}}/api/employee
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "Ana Perez",
+  "email": "ana.perez@example.com",
+  "dni": "12345678-9",
+  "department": "Operaciones",
+  "position": "Analista"
+}
+
+### 5. Enrolar al empleado con un PIN en el dispositivo
+POST {{EmployeeAPI_HostAddress}}/api/enrollment
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "employee_Id": "{{createEmployee.response.body.$.id}}",
+  "device_Id": "{{createDevice.response.body.$.id}}",
+  "pin": "1111"
+}
+
+### 6. Registrar una marcación usando el PIN (simula lo que enviaría el reloj)
+POST {{EmployeeAPI_HostAddress}}/api/punch
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "device_Id": "{{createDevice.response.body.$.id}}",
+  "punchType": "IN",
+  "pin": "1111"
+}
+
+### 7. Consultar empleados filtrados por departamento
+GET {{EmployeeAPI_HostAddress}}/api/employee?departmentName=Operaciones
+Authorization: Bearer {{token}}
+
+### 8. Consultar las marcaciones del empleado
+GET {{EmployeeAPI_HostAddress}}/api/punch?employeeId={{createEmployee.response.body.$.id}}
+Authorization: Bearer {{token}}
+
+### 9. Caso de error esperado: email duplicado -> debe devolver 409
+POST {{EmployeeAPI_HostAddress}}/api/employee
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "Otro Nombre",
+  "email": "ana.perez@example.com",
+  "department": "Operaciones",
+  "position": "Analista"
+}
+
+### 10. Caso de error esperado: sin token -> debe devolver 401
+GET {{EmployeeAPI_HostAddress}}/api/employee
