@@ -26,13 +26,13 @@ namespace EmployeeAPI.Controllers
             var listUser = await _mongoDBService.GetUsersAsync();
             if (listUser is null || listUser.Count == 0)
             {
-                await _mongoDBService.CreateUserAsync(new User { username = "admin", password = "admin" });
+                await _mongoDBService.CreateUserAsync(new User { username = "admin", password = PasswordHasher.Hash("admin") });
             }
 
             var userFind = await _mongoDBService.GetUserAsync(request.Username);
 
             // Mismo mensaje para usuario inexistente y contraseña incorrecta, para no permitir enumerar usuarios.
-            if (userFind is null || userFind.password != request.Password)
+            if (userFind is null || !PasswordHasher.Verify(request.Password, userFind.password))
             {
                 return Unauthorized("Usuario o contraseña incorrectos.");
             }
