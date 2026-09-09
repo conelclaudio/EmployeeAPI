@@ -29,7 +29,7 @@ Particularidades relevantes:
 |---|---|
 | `Program.cs` | Arranque de la app: registra servicios, configura Swagger, ejecuta la inicialización de índices/seed de Mongo al arrancar, y registra el middleware de autenticación antes de `MapControllers()`. |
 | `AuthenticationMiddleware` | Intercepta **todas** las requests. Deja pasar sin token: `OPTIONS`, `GET /health`, `POST /api/auth/login` y `/swagger/*`. Para el resto, valida el JWT del header `Authorization`; si falta o es inválido, corta con `401`. También setea los headers CORS en cada respuesta. |
-| `AuthController` | Login. Si no hay usuarios, siembra `admin/admin`. Compara contraseña en texto plano. Reutiliza el token si sigue vigente; si no, genera uno nuevo vía `Tools`. |
+| `AuthController` | Login. Si no hay usuarios, siembra `admin/admin` con la contraseña ya hasheada. Verifica la contraseña con `PasswordHasher.Verify()` (ver sección 8). Reutiliza el token si sigue vigente; si no, genera uno nuevo vía `Tools`. |
 | `EmployeeController` | CRUD de empleados + consulta de departamentos/posiciones. Al crear un empleado, resuelve o crea implícitamente el departamento y la posición. |
 | `DeviceController` | CRUD de dispositivos de marcación (reloj/terminal). |
 | `EnrollmentController` | Asocia un PIN a un empleado (opcionalmente restringido a un dispositivo). Valida que el empleado y el dispositivo existan, y que el PIN no esté ya en uso en ese alcance. |
@@ -37,6 +37,7 @@ Particularidades relevantes:
 | `HealthController` | Hace un `ping` a Mongo y responde `200`/`503` según conectividad. |
 | `MongoDBService` | Toda la lógica de acceso a datos: CRUD de las 7 colecciones, creación de índices únicos (`Email`, combinación `Employee_Id+Device_Id+Punch_Dtm`, `Code` de tipos de marca), y el seed inicial de tipos de marca (`IN`, `OUT`, `BREAK_IN`, `BREAK_OUT`). |
 | `Tools` | Utilidades estáticas para generar y validar JWT (firma HMAC-SHA256), y leer la fecha de expiración del token. |
+| `PasswordHasher` | Utilidad estática para hashear y verificar contraseñas con PBKDF2 (agregada como parte de la mejora de la sección 8; reemplaza la comparación en texto plano). |
 | Modelos (`Models/`) | DTOs/entidades de Mongo con anotaciones de validación (`[Required]`, `[StringLength]`, `[RegularExpression]`) y de serialización BSON (`[BsonId]`, `[BsonRepresentation]`). |
 
 ## 3. Modelo de datos
@@ -46,7 +47,7 @@ Particularidades relevantes:
 | `Employee` | `employee` | `Id`, `Name`, `Email` (único), `Dni`, `Department_Id`, `Department`, `Position_Id`, `Position` |
 | `Department` | `Departments` | `Id`, `Name` |
 | `Position` | `Positions` | `Id`, `Name`, `DepartmentId` |
-| `User` | `user` | `Id`, `username` (único en la práctica), `password` (texto plano), `token`, `tokenExpiration` |
+| `User` | `user` | `Id`, `username` (único en la práctica), `password` (hash PBKDF2, ver sección 8), `token`, `tokenExpiration` |
 | `Device` | `Devices` | `Id`, `Name` (único), `Location`, `Timezone` (IANA) |
 | `Enrollment` | `Enrollments` | `Id`, `Employee_Id`, `Device_Id` (opcional = alcance global), `Pin`, `Active` |
 | `PunchType` | `PunchTypes` | `Id`, `Code` (único), `Name`, `Description` |
@@ -128,7 +129,7 @@ erDiagram
 
 1. El cliente llama a `POST /api/auth/login` con usuario y contraseña (sin token, esta ruta está exceptuada del middleware).
 2. Si no existe ningún usuario en la base, se crea `admin/admin` automáticamente.
-3. Se busca el usuario por `username` y se compara la contraseña **en texto plano** (riesgo documentado en el README).
+3. Se busca el usuario por `username` y se verifica la contraseña con `PasswordHasher.Verify()` contra el hash almacenado (ver sección 8 — antes de la mejora implementada en este challenge, esta comparación era en texto plano).
 4. Si el token guardado del usuario sigue vigente, se reutiliza. Si no, se genera uno nuevo firmado con `Jwt:SecretKey` (HMAC-SHA256) y se guarda en el documento del usuario.
 5. El cliente debe enviar `Authorization: Bearer <token>` en cada request siguiente. El middleware valida la firma y la expiración en cada llamada (excepto en las rutas exceptuadas).
 
@@ -264,7 +265,7 @@ sequenceDiagram
 
 Ordenados de mayor a menor impacto:
 
-1. **Contraseñas en texto plano** — Impacto alto. Cualquier acceso de lectura a la base (o un backup filtrado) expone las credenciales de todos los usuarios directamente.
+1. ~~Contraseñas en texto plano~~ **[Corregido, ver sección 8]** — Impacto alto (antes de la mejora). Cualquier acceso de lectura a la base (o un backup filtrado) exponía las credenciales de todos los usuarios directamente.
 2. **CORS totalmente abierto** (`Access-Control-Allow-Origin` refleja cualquier `Origin` con `credentials: true`) — Impacto medio-alto. Facilita ataques CSRF/robo de sesión desde cualquier sitio.
 3. **`PATCH` de empleados inconsistente** con `Department_Id`/`Position_Id` — Impacto medio. Genera datos inconsistentes silenciosamente.
 4. **Excepción no controlada en índice único de email** (condición de carrera → `500` en vez de `409`) — Impacto bajo-medio. Solo se manifiesta con requests concurrentes casi simultáneas.
@@ -312,4 +313,4 @@ La comparación en `Verify` usa `CryptographicOperations.FixedTimeEquals` (tiemp
 - Se priorizó PBKDF2 sobre BCrypt/Argon2 por no requerir dependencias externas nuevas, dado el alcance acotado de esta entrega.
 - **Pendiente:** migración de usuarios con contraseñas antiguas en texto plano (actualmente requiere recrear el usuario o la base). En un entorno real se agregaría un script de migración único, o un mecanismo transicional de "rehash en el siguiente login exitoso con texto plano".
 - **Pendiente:** el resto de riesgos de la sección 7 (CORS abierto, `PATCH` inconsistente, falta de paginación, condición de carrera en email único, timezone en marcaciones) no se abordaron en esta entrega — el challenge permite explícitamente elegir una sola mejora acotada en lugar de cubrir todas las recomendaciones.
-- **Pendiente:** la interfaz web opcional (punto 5 del challenge) no se implementó, por priorizar los entregables obligatorios dentro del tiempo disponible.
+- **Interfaz web opcional (punto 5):** se implementó en `frontend/` (HTML/CSS/JS vanilla, sin build). Se estructuró en capas siguiendo el principio de dependencia de Clean Architecture — `api-client.js` (infraestructura) y `session.js` (dominio) no importan `view.js` (presentación) ni entre sí; solo `app.js` (orquestación) conoce a las tres. Esto se aplicó únicamente al frontend, código nuevo sin restricciones de la actividad C; el backend existente no se reestructuró a Clean Architecture, ya que eso habría significado una reescritura grande, incoherente con la restricción de "cambios pequeños, trazables y coherentes con la arquitectura actual" del challenge.

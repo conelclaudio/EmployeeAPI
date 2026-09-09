@@ -19,6 +19,7 @@ Ambos dominios comparten la misma base de datos y el mismo mecanismo de autentic
 - [Catálogo de endpoints](#catálogo-de-endpoints)
 - [Flujo completo de ejemplo: dispositivo → enrolamiento → marcación → consulta](#flujo-completo-de-ejemplo-dispositivo--enrolamiento--marcación--consulta)
 - [Pruebas automatizadas](#pruebas-automatizadas)
+- [Interfaz web (opcional)](#interfaz-web-opcional)
 - [Consideraciones y limitaciones conocidas](#consideraciones-y-limitaciones-conocidas)
 
 ## Requisitos previos
@@ -33,13 +34,13 @@ Ambos dominios comparten la misma base de datos y el mismo mecanismo de autentic
 1. Clona el repositorio y entra a la carpeta del proyecto.
 2. Asegúrate de tener una instancia de MongoDB accesible en `mongodb://localhost:27017/`. Si tu Mongo corre en otro host o puerto, ajusta `MongoDB:ConnectionURI` en `appsettings.Development.json` o usa la variable de entorno correspondiente (ver [sección de configuración](#configuración-y-variables-de-entorno)).
 3. Restaura las dependencias:
-```bash
+   ```bash
    dotnet restore
-```
+   ```
 4. Ejecuta el proyecto:
-```bash
+   ```bash
    dotnet run
-```
+   ```
 5. La API queda disponible en `http://localhost:5146` (perfil `http` de `launchSettings.json`). Swagger se abre automáticamente en `http://localhost:5146/swagger`.
 
 ## Ejecución con Docker Compose (recomendado)
@@ -217,18 +218,33 @@ curl "http://localhost:8080/api/punch?employeeId=66df0a1b2c3d4e5f60718294" \
 
 ## Pruebas automatizadas
 
-El repositorio incluye un proyecto xUnit en `Tests/` con 12 pruebas que cubren: generación y validación de tokens JWT, validaciones de modelos (`Punch`, `Enrollment`, `Device`), y que la respuesta de login no exponga la contraseña. No requieren conexión a MongoDB.
+El repositorio incluye un proyecto xUnit en `Tests/` con 17 pruebas que cubren: generación y validación de tokens JWT, validaciones de modelos (`Punch`, `Enrollment`, `Device`), que la respuesta de login no exponga la contraseña, y el hasher de contraseñas (`PasswordHasher`: verificación correcta, contraseña incorrecta, salts distintos por hash, que el hash nunca contiene la contraseña en texto plano, y manejo de valores con formato inválido/legado). No requieren conexión a MongoDB.
 
 ```bash
 dotnet test Tests/EmployeeAPI.Tests.csproj
 ```
 
 Resultado esperado:
-Aprobado! - Con error: 0, Superado: 12, Omitido: 0, Total: 12
+```
+Aprobado! - Con error: 0, Superado: 17, Omitido: 0, Total: 17
+```
+
+## Interfaz web (opcional)
+
+El repositorio incluye una interfaz web mínima en `frontend/` (punto 5 del challenge, actividad opcional — no reemplaza las actividades obligatorias de arriba). Permite iniciar sesión, consultar y filtrar empleados por departamento/posición o por texto libre (nombre, email, DNI), y — como extensión valorada — consultar marcaciones filtrables por empleado, dispositivo, tipo de marca y rango de fechas. Muestra estados de carga, error y vacío en cada consulta.
+
+Está hecha en HTML/CSS/JavaScript vanilla con módulos ES6 nativos (sin build ni dependencias de Node), separada en capas independientes: `api-client.js` (infraestructura HTTP), `session.js` (dominio de la sesión/token), `view.js` (presentación/DOM) y `app.js` (orquestación, la única capa que conoce a las otras tres).
+
+Para probarla:
+1. Con la API corriendo (Docker Compose o `dotnet run`), abre `frontend/index.html` con un servidor estático local — por ejemplo, la extensión "Live Server" de VS Code (clic derecho sobre el archivo → "Open with Live Server"). No la abras con doble clic directo: los módulos ES6 necesitan servirse por HTTP, no funcionan como archivo local (`file://`).
+2. Inicia sesión con `admin` / `admin`. Si tu API no corre en `http://localhost:8080`, ajusta el campo "URL de la API" en la pantalla de login antes de entrar.
+
+El token se guarda en `sessionStorage` (no `localStorage`) y se limpia automáticamente al cerrar sesión o si el servidor responde `401`.
 
 ## Consideraciones y limitaciones conocidas
 
-- ~~Contraseñas en texto plano~~ **[Corregido]** las contraseñas ahora se almacenan con hash PBKDF2 + salt (ver sección 8 de `ANALISIS_TECNICO.md` para el detalle de la mejora implementada y su evidencia de validación).- **CORS abierto:** el middleware de autenticación refleja cualquier `Origin` como permitido con `credentials: true`, lo cual es muy permisivo para producción.
+- ~~Contraseñas en texto plano~~ **[Corregido]** las contraseñas ahora se almacenan con hash PBKDF2 + salt (ver sección 8 de `ANALISIS_TECNICO.md` para el detalle de la mejora implementada y su evidencia de validación).
+- **CORS abierto:** el middleware de autenticación refleja cualquier `Origin` como permitido con `credentials: true`, lo cual es muy permisivo para producción.
 - **`PATCH /api/employee/{id}`** actualiza campos por reflexión y no sincroniza `Department_Id`/`Position_Id` si cambia el nombre del departamento.
 - **Sin paginación:** los listados de empleados y marcaciones devuelven todos los resultados sin límite, lo que puede ser un problema de rendimiento con datasets grandes.
 - **Condición de carrera en el email único:** el controlador valida duplicados antes de insertar, pero si dos solicitudes llegan casi simultáneamente con el mismo email, el índice único de Mongo puede rechazar el insert con una excepción no controlada (`500`) en lugar de un `409`.
