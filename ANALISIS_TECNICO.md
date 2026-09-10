@@ -273,6 +273,7 @@ Ordenados de mayor a menor impacto:
 6. ~~`User.tokenExpiration` mal calculado~~ **[Corregido, ver sección 8.2]** — guardaba solo el `TimeOfDay` de la expiración (perdía la fecha), por lo que ese campo específico no servía como expiración real (antes de la mejora). Impacto bajo porque la validación real del token nunca dependió de este campo (se valida contra el propio JWT), pero era un dato incorrecto persistido en la base.
 7. **Secretos de desarrollo en `appsettings.json`** — el JWT secret está en el repositorio (aunque marcado como "dev-only"). Impacto bajo si se respeta la convención, pero riesgoso si alguien lo reutiliza en otro ambiente por descuido.
 8. ~~Sin validaciones de formato en `Employee`/`PatchEmployee`~~ **[Corregido, ver sección 8.3]** — `Name`, `Email` y `Dni` no tenían ninguna restricción de formato ni longitud (antes de la mejora); se podían guardar emails inválidos, nombres vacíos o DNIs con cualquier formato. Impacto medio: no es una vulnerabilidad explotable directamente, pero degrada la calidad de los datos y facilita errores aguas abajo (por ejemplo, notificaciones a un email mal formado).
+9. ~~`Timezone` del dispositivo se guardaba pero nunca se usaba~~ **[Corregido, ver sección 8.5]** — `Punch.Timezone` se persistía junto a cada marca, pero la API nunca calculaba ni exponía una hora local a partir de él (antes de la mejora); el cliente tenía que hacer la conversión a mano. Impacto bajo: no es un riesgo de seguridad, es una carencia funcional/de usabilidad.
 
 ## 8. Mejoras implementadas
 
@@ -413,6 +414,37 @@ Con la API corriendo (`docker compose up`), se probó manualmente vía el archiv
 2. Se le aplicó `PATCH /api/employee/{id}` con `{"department": "Tecnologia"}`.
 3. Se confirmó en Mongo Express que el documento del empleado quedó con `Department: "Tecnologia"` **y** `Department_Id` apuntando al `_id` real del departamento "Tecnologia" (no al de "Operaciones") — comportamiento distinto al que había antes del fix, donde `Department_Id` se hubiera quedado con el valor viejo.
 
+### 8.5 Exponer la hora local de la marca usando el `Timezone` del dispositivo
+
+**Problema**
+
+Cada `Punch` guarda `Punch_Dtm` (la fecha/hora en UTC) y `Timezone` (la zona horaria del dispositivo, ej. `"America/Santiago"`), pero nadie combinaba esos dos datos para calcular una hora local legible. El cliente de la API tenía que hacer esa conversión por su cuenta. Es el riesgo #9 identificado en la sección 7, y coincide con una mejora sugerida explícitamente por el challenge.
+
+#### Decisión técnica tomada
+
+Se agregó `TimeZoneHelper.ToLocalTime(DateTime utc, string? ianaTimeZoneId)`, una función pura que usa `TimeZoneInfo` (incluido en .NET, sin dependencias nuevas) para convertir. Se expuso como una propiedad calculada de solo lectura en `Punch`: `Punch_Dtm_Local`, marcada con `[BsonIgnore]` para que **no se persista** en Mongo — se recalcula cada vez que se serializa la respuesta, a partir de `Punch_Dtm` y `Timezone` que ya existían.
+
+Se decidió que el helper **nunca lanza una excepción**: si `Timezone` es nulo/vacío, o si el sistema operativo no reconoce ese identificador (por ejemplo, si faltara la base de datos de zonas horarias del sistema operativo), devuelve `null` en vez de reventar. Un dato de conveniencia como este no debería poder impedir que una marca se registre o se consulte.
+
+#### Archivos modificados
+
+| Archivo | Tipo de cambio |
+|---|---|
+| `Models/TimeZoneHelper.cs` | Nuevo — contiene `ToLocalTime()`. |
+| `Models/Punch.cs` | Modificado — se agregó la propiedad calculada `Punch_Dtm_Local`. |
+| `Tests/TimeZoneHelperTests.cs` | Nuevo — 7 pruebas (ver evidencia abajo). |
+
+#### Riesgos y efectos secundarios considerados
+
+- **Depende de que el sistema operativo del contenedor tenga la base de datos de zonas horarias (`tzdata`) instalada.** La imagen base (`mcr.microsoft.com/dotnet/aspnet:8.0`, Debian) la trae por defecto, pero si algún día cambia la imagen base, esto podría dejar de funcionar. Por diseño, el helper no rompe nada si eso pasara: simplemente `Punch_Dtm_Local` sale `null`.
+- **Sin cambio de contrato para consumidores existentes:** `Punch_Dtm` y `Timezone` siguen exactamente igual; `punch_Dtm_Local` es un campo *adicional* en la respuesta JSON, no reemplaza nada. Ningún cliente que ya lea la respuesta se rompe por este cambio.
+- **No se aplicó horario de verano de forma manual:** se usa `TimeZoneInfo`, que ya maneja las reglas de horario de verano de cada zona automáticamente (por eso los tests usan Bogotá y Tokio, que no tienen horario de verano, para que el resultado esperado no dependa de en qué fecha se ejecute el test).
+
+#### Evidencia de validación
+
+1. **Tests automatizados:** 7 pruebas en `TimeZoneHelperTests.cs`: conversión correcta con 2 zonas horarias reales sin horario de verano (Bogotá UTC-5, Tokio UTC+9), `Timezone` nulo o vacío devuelve `null`, un identificador de zona inválido devuelve `null` en vez de lanzar excepción, y 2 pruebas de integración contra la propiedad `Punch.Punch_Dtm_Local` directamente.
+2. **Suite completa:** `dotnet test Tests/EmployeeAPI.Tests.csproj` → todas las pruebas en verde.
+
 ## 9. Decisiones técnicas y pendientes
 
 - Se priorizó PBKDF2 sobre BCrypt/Argon2 por no requerir dependencias externas nuevas, dado el alcance acotado de esta entrega.
@@ -420,6 +452,7 @@ Con la API corriendo (`docker compose up`), se probó manualmente vía el archiv
 - **Se implementó una tercera mejora (sección 8.3):** validaciones de entrada en `Employee`/`PatchEmployee`, replicando el estilo de `DataAnnotations` que ya usaba el resto del proyecto (`Device`, `Enrollment`, `PunchType`) en vez de introducir un enfoque nuevo. Efecto secundario a tener presente: `PUT /api/employee/{id}` ahora es más estricto que antes (rechaza formatos que antes aceptaba), un cambio de comportamiento intencional documentado en la sección 8.3.
 - **Se implementó una cuarta mejora (sección 8.4):** consistencia de `Department_Id` en el `PATCH` de empleados. A diferencia de las 3 mejoras anteriores, esta no tiene pruebas automatizadas propias — depende de `MongoDBService` real y el proyecto no usa mocking, así que se validó manualmente (documentado en la sección 8.4). Se decidió ser explícitos sobre esta diferencia de cobertura en vez de ocultarla.
 - **Pendiente:** `Position`/`Position_Id` pueden quedar semánticamente inconsistentes tras un `PATCH` que cambia `Department` (ver riesgos de la sección 8.4) — no se resolvió porque `PatchEmployee` no expone `Position` como campo editable; solucionarlo de raíz implicaría ampliar el contrato del endpoint, fuera del alcance de una corrección acotada.
+- **Se implementó una quinta mejora (sección 8.5):** exponer la hora local de la marca (`Punch_Dtm_Local`) a partir de `Timezone`, con una función pura y testeable (`TimeZoneHelper`), sin dependencias nuevas. Se priorizó que nunca lance una excepción (por ejemplo, si el sistema operativo no reconoce la zona horaria), devolviendo `null` en ese caso en vez de romper el registro o la consulta de una marca.
 - **Pendiente:** migración de usuarios con contraseñas antiguas en texto plano (actualmente requiere recrear el usuario o la base). En un entorno real se agregaría un script de migración único, o un mecanismo transicional de "rehash en el siguiente login exitoso con texto plano".
 - **Pendiente:** documentos de `user` guardados en Mongo *antes* de la corrección de `tokenExpiration` (sección 8.2) quedan con un valor de tipo incompatible (`TimeSpan` en vez de `DateTime`); requieren una base limpia o una migración, igual que el punto anterior.
 - **Pendiente:** el resto de riesgos de la sección 7 (CORS abierto, `PATCH` inconsistente, falta de paginación, condición de carrera en email único, timezone en marcaciones) no se abordaron en esta entrega — el challenge permite explícitamente elegir mejoras acotadas en lugar de cubrir todas las recomendaciones.

@@ -154,6 +154,8 @@ Todas las rutas (salvo las exceptuadas arriba) requieren el header `Authorizatio
 | POST | `/api/punch` | `{ Device_Id, PunchType, Punch_Dtm?, Employee_Id? \| Dni? \| Pin? }` | `201` `Punch` creado con `Status: "VALID"` | `400` dispositivo/tipo de marca inválido, empleado no identificable, o fecha futura; `404` dispositivo no encontrado; `409` marca duplicada (mismo empleado, dispositivo y fecha) |
 
 > El empleado que marca se identifica con **uno** de estos tres datos, en este orden de prioridad: `Employee_Id` directo, `Dni`, o `Pin` (buscando el enrolamiento activo en ese dispositivo). Si no se puede resolver con ninguno, se rechaza con `400`.
+>
+> Toda respuesta que incluya un `Punch` trae además `punch_Dtm_Local`: la hora local de la marca, calculada a partir de `punch_Dtm` (UTC) y `timezone`. Es un campo calculado, no se guarda en la base — si el dispositivo no informó `timezone`, o la zona no se pudo resolver, este campo viene `null`.
 
 ## Flujo completo de ejemplo: dispositivo → enrolamiento → marcación → consulta
 
@@ -206,7 +208,7 @@ curl -X POST http://localhost:8080/api/punch \
   -d '{"device_Id":"66df0a1b2c3d4e5f60718293","punchType":"IN","pin":"4821"}'
 ```
 ```json
-{ "id": "66df0a1b2c3d4e5f60718296", "device_Id": "66df0a1b2c3d4e5f60718293", "employee_Id": "66df0a1b2c3d4e5f60718294", "punchType": "IN", "punch_Dtm": "2026-09-09T13:05:00Z", "timezone": "America/Santiago", "status": "VALID" }
+{ "id": "66df0a1b2c3d4e5f60718296", "device_Id": "66df0a1b2c3d4e5f60718293", "employee_Id": "66df0a1b2c3d4e5f60718294", "punchType": "IN", "punch_Dtm": "2026-09-09T13:05:00Z", "punch_Dtm_Local": "2026-09-09T10:05:00", "timezone": "America/Santiago", "status": "VALID" }
 ```
 
 **6. Consultar las marcaciones del empleado**
@@ -215,12 +217,12 @@ curl "http://localhost:8080/api/punch?employeeId=66df0a1b2c3d4e5f60718294" \
   -H "Authorization: Bearer $TOKEN"
 ```
 ```json
-[ { "id": "66df0a1b2c3d4e5f60718296", "punchType": "IN", "punch_Dtm": "2026-09-09T13:05:00Z", "status": "VALID", "...": "..." } ]
+[ { "id": "66df0a1b2c3d4e5f60718296", "punchType": "IN", "punch_Dtm": "2026-09-09T13:05:00Z", "punch_Dtm_Local": "2026-09-09T10:05:00", "status": "VALID", "...": "..." } ]
 ```
 
 ## Pruebas automatizadas
 
-El repositorio incluye un proyecto xUnit en `Tests/` con 33 pruebas que cubren: generación y validación de tokens JWT (incluyendo que `tokenExpiration` ahora guarda la fecha completa, no solo la hora del día), validaciones de modelos (`Punch`, `Enrollment`, `Device`, `Employee`, `PatchEmployee` — formato de email, DNI, campos obligatorios y actualizaciones parciales), que la respuesta de login no exponga la contraseña, y el hasher de contraseñas (`PasswordHasher`: verificación correcta, contraseña incorrecta, salts distintos por hash, que el hash nunca contiene la contraseña en texto plano, y manejo de valores con formato inválido/legado). No requieren conexión a MongoDB.
+El repositorio incluye un proyecto xUnit en `Tests/` con 40 pruebas que cubren: generación y validación de tokens JWT (incluyendo que `tokenExpiration` ahora guarda la fecha completa, no solo la hora del día), validaciones de modelos (`Punch`, `Enrollment`, `Device`, `Employee`, `PatchEmployee` — formato de email, DNI, campos obligatorios y actualizaciones parciales), que la respuesta de login no exponga la contraseña, el hasher de contraseñas (`PasswordHasher`: verificación correcta, contraseña incorrecta, salts distintos por hash, que el hash nunca contiene la contraseña en texto plano, y manejo de valores con formato inválido/legado), y la conversión de zona horaria (`TimeZoneHelper`: conversión correcta con zonas horarias reales, manejo de zonas inválidas o ausentes sin lanzar excepciones). No requieren conexión a MongoDB.
 
 ```bash
 dotnet test Tests/EmployeeAPI.Tests.csproj
@@ -228,7 +230,7 @@ dotnet test Tests/EmployeeAPI.Tests.csproj
 
 Resultado esperado:
 ```
-Aprobado! - Con error: 0, Superado: 33, Omitido: 0, Total: 33
+Aprobado! - Con error: 0, Superado: 40, Omitido: 0, Total: 40
 ```
 
 ## Interfaz web (opcional)

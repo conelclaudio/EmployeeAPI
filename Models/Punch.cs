@@ -33,6 +33,10 @@ namespace EmployeeAPI.Models
         [StringLength(64)]
         public string? Timezone { get; set; }
 
+        /// <summary>Hora local de la marca, calculada a partir de Punch_Dtm (UTC) y Timezone. Null si no hay Timezone o no se pudo resolver. No se persiste: se recalcula cada vez.</summary>
+        [BsonIgnore]
+        public DateTime? Punch_Dtm_Local => TimeZoneHelper.ToLocalTime(Punch_Dtm, Timezone);
+
         [StringLength(20)]
         public string? Dni { get; set; }
 
