@@ -121,27 +121,35 @@ namespace EmployeeAPI.Controllers
         [HttpPatch("{id}")]
         public async Task<ActionResult<Employee>> UpdateEmployee(string id, PatchEmployee employee)
         {
-            // Obtener los campos del body
-            employee.Id = id;
-            var updatedEmployee = employee.ToDictionary();
-
-            // Actualizar el objeto
             var employeeFromDb = await _mongoDBService.GetAsync(id);
 
-            if (employeeFromDb == null)
+            if (employeeFromDb is null)
             {
                 return NotFound();
             }
-            
-            foreach (var key in updatedEmployee.Keys)
+
+            if (employee.Name is not null)
             {
-                if (typeof(Employee).GetProperty(key) != null)
+                employeeFromDb.Name = employee.Name;
+            }
+
+            if (employee.Email is not null)
+            {
+                employeeFromDb.Email = employee.Email;
+            }
+
+            if (employee.Department is not null && employee.Department != employeeFromDb.Department)
+            {
+                // Mismo patron de "buscar o crear" que usa POST (linea 61 mas arriba), para no
+                // dejar Department_Id apuntando al departamento viejo cuando cambia el nombre.
+                var department = await _mongoDBService.GetDepartmentByNameAsync(employee.Department);
+                if (department is null)
                 {
-                    if (updatedEmployee[key] != null)
-                    {
-                        typeof(Employee).GetProperty(key).SetValue(employeeFromDb, updatedEmployee[key]);
-                    }
+                    department = await _mongoDBService.CreateDepartmentAsync(employee.Department);
                 }
+
+                employeeFromDb.Department = employee.Department;
+                employeeFromDb.Department_Id = department.Id;
             }
 
             await _mongoDBService.UpdateAsync(id, employeeFromDb);

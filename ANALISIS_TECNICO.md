@@ -173,7 +173,7 @@ sequenceDiagram
 
 **Actualización (`PUT /api/employee/{id}`):** reemplaza el documento completo, conservando el `Id` original.
 
-**Actualización parcial (`PATCH /api/employee/{id}`):** actualiza por reflexión solo los campos enviados en `PatchEmployee` (`Name`, `Email`, `Department`). **Riesgo:** si se cambia `Department` por este medio, no se recalcula `Department_Id`, quedando inconsistente con el nombre.
+**Actualización parcial (`PATCH /api/employee/{id}`):** actualiza explícitamente solo los campos enviados en `PatchEmployee` (`Name`, `Email`, `Department`). Si se envía `Department` y es distinto al actual, se resuelve (busca-o-crea, igual que en `POST`) y se actualizan `Department` y `Department_Id` **juntos**, evitando la inconsistencia que existía antes de la mejora de la sección 8.4. `Position`/`Position_Id` no se pueden modificar por este medio (no forman parte de `PatchEmployee`), así que no hay riesgo de inconsistencia ahí a través del `PATCH`.
 
 ### 5.1 Diagrama de secuencia — Creación de empleado
 
@@ -267,7 +267,7 @@ Ordenados de mayor a menor impacto:
 
 1. ~~Contraseñas en texto plano~~ **[Corregido, ver sección 8.1]** — Impacto alto (antes de la mejora). Cualquier acceso de lectura a la base (o un backup filtrado) exponía las credenciales de todos los usuarios directamente.
 2. **CORS totalmente abierto** (`Access-Control-Allow-Origin` refleja cualquier `Origin` con `credentials: true`) — Impacto medio-alto. Facilita ataques CSRF/robo de sesión desde cualquier sitio.
-3. **`PATCH` de empleados inconsistente** con `Department_Id`/`Position_Id` — Impacto medio. Genera datos inconsistentes silenciosamente.
+3. ~~`PATCH` de empleados inconsistente~~ **[Corregido, ver sección 8.4]** con `Department_Id` (antes de la mejora). Impacto medio: generaba datos inconsistentes silenciosamente.
 4. **Excepción no controlada en índice único de email** (condición de carrera → `500` en vez de `409`) — Impacto bajo-medio. Solo se manifiesta con requests concurrentes casi simultáneas.
 5. **Sin paginación** en listados — Impacto bajo a corto plazo, alto a largo plazo (rendimiento y uso de memoria con datasets grandes).
 6. ~~`User.tokenExpiration` mal calculado~~ **[Corregido, ver sección 8.2]** — guardaba solo el `TimeOfDay` de la expiración (perdía la fecha), por lo que ese campo específico no servía como expiración real (antes de la mejora). Impacto bajo porque la validación real del token nunca dependió de este campo (se valida contra el propio JWT), pero era un dato incorrecto persistido en la base.
@@ -379,11 +379,47 @@ Como efecto colateral positivo, agregar `= null!;` a las propiedades no-nulas (s
 1. **Tests automatizados:** se agregaron 8 métodos de prueba a `ModelValidationTests.cs` (algunos con múltiples casos vía `[Theory]`), cubriendo: campos requeridos válidos, `Name` vacío, 3 formatos de email inválidos, 3 formatos de DNI inválidos, 3 formatos de DNI válidos (incluyendo el dígito verificador `K` en mayúscula y minúscula), DNI ausente (debe seguir siendo válido, por ser opcional), y que `PatchEmployee` sin ningún campo enviado sigue siendo válido (por ser una actualización parcial).
 2. **Suite completa:** `dotnet test Tests/EmployeeAPI.Tests.csproj` → todas las pruebas en verde (19 anteriores + las nuevas de esta mejora).
 
+### 8.4 Consistencia de `Department_Id` en el `PATCH` de empleados
+
+**Problema**
+
+`PATCH /api/employee/{id}` actualizaba los campos enviados **por reflexión genérica**: tomaba cada propiedad no nula de `PatchEmployee` y la copiaba directo al `Employee` guardado, sin ninguna lógica adicional. Si el body incluía `{"department": "Tecnologia"}`, el campo `Department` cambiaba, pero `Department_Id` seguía apuntando al departamento anterior — el empleado quedaba con un nombre de departamento y un ID de departamento que no correspondían entre sí. Es el riesgo #3 identificado en la sección 7.
+
+(La parte del riesgo original que hablaba de `Position_Id` no aplicaba en la práctica: `PatchEmployee` nunca expuso `Position` como campo editable, así que no existía una ruta real para inconsistencia ahí.)
+
+#### Decisión técnica tomada
+
+Se reemplazó el bucle de reflexión por actualizaciones explícitas campo por campo. Para `Name` y `Email`, el cambio es directo. Para `Department`, se replicó el mismo patrón "buscar o crear" que ya usa `POST /api/employee` (`GetDepartmentByNameAsync` → si no existe, `CreateDepartmentAsync`), y se actualizan `Department` y `Department_Id` **en la misma operación**, nunca uno sin el otro. Se agregó además una comparación previa (`employee.Department != employeeFromDb.Department`) para no golpear la base innecesariamente si el valor enviado es igual al que ya tenía el empleado.
+
+Se descartó reescribir todo el endpoint para aceptar también `Position` en el `PATCH` (que solucionaría el caso de `Position_Id` de raíz): habría sido un cambio de alcance de la API, no una corrección de un bug, y se sale de lo que esta mejora busca resolver.
+
+#### Archivos modificados
+
+| Archivo | Tipo de cambio |
+|---|---|
+| `Controllers/EmployeeController.cs` | Modificado — el método `UpdateEmployee` (`PATCH`) ya no usa reflexión; actualiza cada campo explícitamente y resuelve `Department_Id` igual que `POST`. |
+
+#### Riesgos y efectos secundarios considerados
+
+- **Sin pruebas automatizadas para esta mejora puntual.** A diferencia de las mejoras 8.1 y 8.2 (funciones puras, testeables sin infraestructura), este fix depende de `MongoDBService` real (buscar/crear un departamento). El proyecto no usa ninguna librería de mocking, y agregar una solo para esta prueba habría significado sumar una dependencia nueva no estrictamente necesaria. Se optó por **validación manual end-to-end** en su lugar (ver evidencia abajo), siendo transparentes sobre esta limitación en vez de forzar una cobertura automatizada artificial.
+- **Si el nuevo nombre de departamento no existía, se crea uno nuevo** (igual que en `POST`) — esto es el comportamiento esperado y documentado, pero vale la pena tenerlo presente: un typo en el `PATCH` (ej. "Operaiones" en vez de "Operaciones") crea silenciosamente un departamento nuevo en vez de fallar. Este comportamiento ya existía en `POST` desde antes; no es nuevo de esta mejora, solo se replicó por consistencia.
+- **`Position`/`Position_Id` no se re-validan cuando cambia `Department`** — si un empleado en "Operaciones / Analista" cambia de departamento a "Tecnologia" vía `PATCH`, se queda con `Position: "Analista"` y su `Position_Id` original, aunque "Analista" nunca se haya creado dentro de "Tecnologia". Corregir esto de raíz requeriría permitir editar `Position` en el mismo `PATCH` (fuera del alcance elegido para esta mejora) — queda documentado como limitación conocida, no resuelta.
+
+#### Evidencia de validación
+
+Con la API corriendo (`docker compose up`), se probó manualmente vía el archivo `EmployeeAPI.http`:
+
+1. Se creó un empleado en el departamento "Operaciones" (`POST /api/employee`).
+2. Se le aplicó `PATCH /api/employee/{id}` con `{"department": "Tecnologia"}`.
+3. Se confirmó en Mongo Express que el documento del empleado quedó con `Department: "Tecnologia"` **y** `Department_Id` apuntando al `_id` real del departamento "Tecnologia" (no al de "Operaciones") — comportamiento distinto al que había antes del fix, donde `Department_Id` se hubiera quedado con el valor viejo.
+
 ## 9. Decisiones técnicas y pendientes
 
 - Se priorizó PBKDF2 sobre BCrypt/Argon2 por no requerir dependencias externas nuevas, dado el alcance acotado de esta entrega.
 - **Se implementó una segunda mejora (sección 8.2) además de la mínima requerida**, ya que el tiempo disponible lo permitió y el challenge valora la calidad sobre la cantidad, no la cantidad mínima estricta. Se priorizó `tokenExpiration` sobre otras candidatas (CORS, PATCH, paginación) porque es la única que el propio challenge señala explícitamente como "buen candidato a corrección", y porque se pudo verificar con confianza que ningún otro código dependía del valor viejo antes de cambiarlo — el mismo nivel de cuidado que la primera mejora, no una adición apurada.
 - **Se implementó una tercera mejora (sección 8.3):** validaciones de entrada en `Employee`/`PatchEmployee`, replicando el estilo de `DataAnnotations` que ya usaba el resto del proyecto (`Device`, `Enrollment`, `PunchType`) en vez de introducir un enfoque nuevo. Efecto secundario a tener presente: `PUT /api/employee/{id}` ahora es más estricto que antes (rechaza formatos que antes aceptaba), un cambio de comportamiento intencional documentado en la sección 8.3.
+- **Se implementó una cuarta mejora (sección 8.4):** consistencia de `Department_Id` en el `PATCH` de empleados. A diferencia de las 3 mejoras anteriores, esta no tiene pruebas automatizadas propias — depende de `MongoDBService` real y el proyecto no usa mocking, así que se validó manualmente (documentado en la sección 8.4). Se decidió ser explícitos sobre esta diferencia de cobertura en vez de ocultarla.
+- **Pendiente:** `Position`/`Position_Id` pueden quedar semánticamente inconsistentes tras un `PATCH` que cambia `Department` (ver riesgos de la sección 8.4) — no se resolvió porque `PatchEmployee` no expone `Position` como campo editable; solucionarlo de raíz implicaría ampliar el contrato del endpoint, fuera del alcance de una corrección acotada.
 - **Pendiente:** migración de usuarios con contraseñas antiguas en texto plano (actualmente requiere recrear el usuario o la base). En un entorno real se agregaría un script de migración único, o un mecanismo transicional de "rehash en el siguiente login exitoso con texto plano".
 - **Pendiente:** documentos de `user` guardados en Mongo *antes* de la corrección de `tokenExpiration` (sección 8.2) quedan con un valor de tipo incompatible (`TimeSpan` en vez de `DateTime`); requieren una base limpia o una migración, igual que el punto anterior.
 - **Pendiente:** el resto de riesgos de la sección 7 (CORS abierto, `PATCH` inconsistente, falta de paginación, condición de carrera en email único, timezone en marcaciones) no se abordaron en esta entrega — el challenge permite explícitamente elegir mejoras acotadas en lugar de cubrir todas las recomendaciones.
