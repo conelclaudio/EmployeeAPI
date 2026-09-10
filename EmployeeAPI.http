@@ -85,3 +85,15 @@ Authorization: Bearer {{token}}
 
 ### 10. Caso de error esperado: sin token -> debe devolver 401
 GET {{EmployeeAPI_HostAddress}}/api/employee
+
+### 11. Caso de error esperado: email con formato invalido -> debe devolver 400
+POST {{EmployeeAPI_HostAddress}}/api/employee
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "Empleado Invalido",
+  "email": "esto-no-es-un-email",
+  "department": "Operaciones",
+  "position": "Analista"
+}

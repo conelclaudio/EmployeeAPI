@@ -115,12 +115,14 @@ Todas las rutas (salvo las exceptuadas arriba) requieren el header `Authorizatio
 |---|---|---|---|---|
 | GET | `/api/employee` | Query opcional: `departmentName`, `positionName` | `200` `Employee[]` | — |
 | GET | `/api/employee/{id}` | `id` (24 caracteres, ObjectId) | `200` `Employee` | `404` no existe |
-| POST | `/api/employee` | `{ Name, Email, Dni?, Department, Position }` | `201` `Employee` creado | `400` si se envía `Id`; `409` si el email ya existe |
-| PUT | `/api/employee/{id}` | `Employee` completo | `200` `Employee` actualizado | `404` no existe |
-| PATCH | `/api/employee/{id}` | `{ Name?, Email?, Department? }` (campos parciales) | `200` `Employee` actualizado | `404` no existe |
+| POST | `/api/employee` | `{ Name, Email, Dni?, Department, Position }` | `201` `Employee` creado | `400` si se envía `Id`, o si `Name`/`Email`/`Department`/`Position` no cumplen el formato requerido (ver nota), o si `Dni` no tiene el formato `12345678-9`; `409` si el email ya existe |
+| PUT | `/api/employee/{id}` | `Employee` completo | `200` `Employee` actualizado | `400` si el body no cumple las validaciones de formato (mismas que en `POST`); `404` no existe |
+| PATCH | `/api/employee/{id}` | `{ Name?, Email?, Department? }` (campos parciales) | `200` `Employee` actualizado | `400` si algún campo enviado no cumple el formato (los campos omitidos no se validan); `404` no existe |
 | DELETE | `/api/employee/{id}` | — | `204` | `404` no existe |
 | GET | `/api/employee/departments` | — | `200` `Department[]` | — |
 | GET | `/api/employee/departments/{departmentId}/positions` | — | `200` `Position[]` | — |
+
+> **Formato requerido:** `Name`/`Department`/`Position` entre 2 y 100 caracteres; `Email` con formato de correo válido (máx. 150 caracteres); `Dni` (opcional) con formato `12345678-9` si se envía. El DNI sigue siendo opcional porque un empleado también puede identificarse por `Id` o `Pin` al marcar (ver flujo de marcación más abajo).
 
 ### Dispositivos
 
@@ -218,7 +220,7 @@ curl "http://localhost:8080/api/punch?employeeId=66df0a1b2c3d4e5f60718294" \
 
 ## Pruebas automatizadas
 
-El repositorio incluye un proyecto xUnit en `Tests/` con 19 pruebas que cubren: generación y validación de tokens JWT (incluyendo que `tokenExpiration` ahora guarda la fecha completa, no solo la hora del día), validaciones de modelos (`Punch`, `Enrollment`, `Device`), que la respuesta de login no exponga la contraseña, y el hasher de contraseñas (`PasswordHasher`: verificación correcta, contraseña incorrecta, salts distintos por hash, que el hash nunca contiene la contraseña en texto plano, y manejo de valores con formato inválido/legado). No requieren conexión a MongoDB.
+El repositorio incluye un proyecto xUnit en `Tests/` con 33 pruebas que cubren: generación y validación de tokens JWT (incluyendo que `tokenExpiration` ahora guarda la fecha completa, no solo la hora del día), validaciones de modelos (`Punch`, `Enrollment`, `Device`, `Employee`, `PatchEmployee` — formato de email, DNI, campos obligatorios y actualizaciones parciales), que la respuesta de login no exponga la contraseña, y el hasher de contraseñas (`PasswordHasher`: verificación correcta, contraseña incorrecta, salts distintos por hash, que el hash nunca contiene la contraseña en texto plano, y manejo de valores con formato inválido/legado). No requieren conexión a MongoDB.
 
 ```bash
 dotnet test Tests/EmployeeAPI.Tests.csproj
@@ -226,7 +228,7 @@ dotnet test Tests/EmployeeAPI.Tests.csproj
 
 Resultado esperado:
 ```
-Aprobado! - Con error: 0, Superado: 19, Omitido: 0, Total: 19
+Aprobado! - Con error: 0, Superado: 33, Omitido: 0, Total: 33
 ```
 
 ## Interfaz web (opcional)

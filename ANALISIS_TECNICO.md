@@ -265,13 +265,14 @@ sequenceDiagram
 
 Ordenados de mayor a menor impacto:
 
-1. ~~Contraseñas en texto plano~~ **[Corregido, ver sección 8]** — Impacto alto (antes de la mejora). Cualquier acceso de lectura a la base (o un backup filtrado) exponía las credenciales de todos los usuarios directamente.
+1. ~~Contraseñas en texto plano~~ **[Corregido, ver sección 8.1]** — Impacto alto (antes de la mejora). Cualquier acceso de lectura a la base (o un backup filtrado) exponía las credenciales de todos los usuarios directamente.
 2. **CORS totalmente abierto** (`Access-Control-Allow-Origin` refleja cualquier `Origin` con `credentials: true`) — Impacto medio-alto. Facilita ataques CSRF/robo de sesión desde cualquier sitio.
 3. **`PATCH` de empleados inconsistente** con `Department_Id`/`Position_Id` — Impacto medio. Genera datos inconsistentes silenciosamente.
 4. **Excepción no controlada en índice único de email** (condición de carrera → `500` en vez de `409`) — Impacto bajo-medio. Solo se manifiesta con requests concurrentes casi simultáneas.
 5. **Sin paginación** en listados — Impacto bajo a corto plazo, alto a largo plazo (rendimiento y uso de memoria con datasets grandes).
 6. ~~`User.tokenExpiration` mal calculado~~ **[Corregido, ver sección 8.2]** — guardaba solo el `TimeOfDay` de la expiración (perdía la fecha), por lo que ese campo específico no servía como expiración real (antes de la mejora). Impacto bajo porque la validación real del token nunca dependió de este campo (se valida contra el propio JWT), pero era un dato incorrecto persistido en la base.
 7. **Secretos de desarrollo en `appsettings.json`** — el JWT secret está en el repositorio (aunque marcado como "dev-only"). Impacto bajo si se respeta la convención, pero riesgoso si alguien lo reutiliza en otro ambiente por descuido.
+8. ~~Sin validaciones de formato en `Employee`/`PatchEmployee`~~ **[Corregido, ver sección 8.3]** — `Name`, `Email` y `Dni` no tenían ninguna restricción de formato ni longitud (antes de la mejora); se podían guardar emails inválidos, nombres vacíos o DNIs con cualquier formato. Impacto medio: no es una vulnerabilidad explotable directamente, pero degrada la calidad de los datos y facilita errores aguas abajo (por ejemplo, notificaciones a un email mal formado).
 
 ## 8. Mejoras implementadas
 
@@ -342,10 +343,47 @@ Se verificó primero que ningún otro archivo del proyecto (controladores, servi
 2. **Suite completa:** `dotnet test Tests/EmployeeAPI.Tests.csproj` → todas las pruebas (las 17 anteriores + las 2 nuevas, 19 en total) en verde.
 3. **Prueba manual end-to-end:** tras `docker compose down -v && docker compose up --build` (base limpia), `POST /api/auth/login` respondió `200` con `"expiresAtUtc": "2026-09-10T11:45:49Z"`. Al inspeccionar el mismo usuario en Mongo Express, el campo `tokenExpiration` mostró `Thu Sep 10 2026 11:45:49 GMT+0000` — una fecha completa (día, mes, año y hora) que coincide exactamente con la expiración real del JWT, en vez de un valor de solo horas sin fecha como antes del fix.
 
+### 8.3 Validaciones de entrada en `Employee`/`PatchEmployee`
+
+**Problema**
+
+Ni `Employee` ni `PatchEmployee` tenían ninguna anotación de validación: `Name`, `Email` y `Department` eran `string` no-nulos sin ninguna restricción real (de hecho, generaban las advertencias del compilador `CS8618` vistas en cada `dotnet test`, porque nunca se les daba un valor por defecto), y `Dni` aceptaba cualquier texto. Es el riesgo #8 identificado en la sección 7, y coincide con una de las mejoras sugeridas explícitamente por el challenge.
+
+#### Decisión técnica tomada
+
+Se agregaron `DataAnnotations` siguiendo exactamente el mismo estilo que ya usa el proyecto en `Device.cs`, `Enrollment.cs` y `PunchType.cs` (`[Required]`, `[StringLength]`, `[RegularExpression]` con `ErrorMessage` en español) — no se inventó un estilo nuevo, se replicó el existente:
+
+- `Name`, `Department`, `Position`: `[Required]` + `[StringLength(100, MinimumLength = 2)]`.
+- `Email`: `[Required]` + `[EmailAddress]` + `[StringLength(150)]`.
+- `Dni`: **se mantuvo opcional** (sin `[Required]`), pero se le agregó `[RegularExpression(@"^\d{7,8}-[\dkK]$")]` para validar el formato cuando sí se envía. No se hizo obligatorio porque el diseño original ya permite identificar a un empleado por `Id` o `Pin` al marcar, sin depender del DNI (ver sección 6) — exigirlo habría sido un cambio de comportamiento no solicitado, no solo una validación.
+- En `PatchEmployee`, los mismos formatos se validan (`StringLength`, `EmailAddress`) pero **ningún campo es `[Required]`**, porque un `PATCH` parcial legítimamente puede no enviar todos los campos.
+
+Como efecto colateral positivo, agregar `= null!;` a las propiedades no-nulas (siguiendo el mismo patrón que `Device.cs`) eliminó las advertencias `CS8618` de `Employee.cs` que aparecían en cada build.
+
+#### Archivos modificados
+
+| Archivo | Tipo de cambio |
+|---|---|
+| `Models/Employee.cs` | Modificado — se agregaron `DataAnnotations` a `Name`, `Email`, `Dni`, `Department`, `Position`. |
+| `Models/PatchEmployee.cs` | Modificado — se agregaron `DataAnnotations` a `Name`, `Email`, `Department` (todos opcionales). |
+| `Tests/ModelValidationTests.cs` | Se agregaron pruebas para `Employee` y `PatchEmployee` (ver evidencia abajo). |
+
+#### Riesgos y efectos secundarios considerados
+
+- **Empleados ya guardados en Mongo con datos que no pasarían estas validaciones** (por ejemplo, un email mal formado creado antes de este cambio) no se ven afectados retroactivamente: las validaciones solo se aplican en el momento de recibir un request nuevo (`POST`/`PUT`/`PATCH`), no al leer datos existentes. No hay riesgo de que la API deje de funcionar con datos viejos, a diferencia de las dos mejoras anteriores.
+- **`PUT /api/employee/{id}` ahora exige el mismo formato que `POST`** (porque reutiliza el modelo `Employee` completo), lo que significa que actualizar un empleado con un email inválido que antes se aceptaba, ahora será rechazado con `400`. Es un cambio de comportamiento intencional y deseado, pero vale la pena que quede explícito.
+- **No se validó `Department`/`Position` contra la lista real de departamentos/posiciones existentes** — solo se valida formato (longitud mínima/máxima), no que el valor "tenga sentido" en el negocio. Eso sigue siendo responsabilidad de la lógica de `EmployeeController` (buscar-o-crear), que no se tocó.
+
+#### Evidencia de validación
+
+1. **Tests automatizados:** se agregaron 8 métodos de prueba a `ModelValidationTests.cs` (algunos con múltiples casos vía `[Theory]`), cubriendo: campos requeridos válidos, `Name` vacío, 3 formatos de email inválidos, 3 formatos de DNI inválidos, 3 formatos de DNI válidos (incluyendo el dígito verificador `K` en mayúscula y minúscula), DNI ausente (debe seguir siendo válido, por ser opcional), y que `PatchEmployee` sin ningún campo enviado sigue siendo válido (por ser una actualización parcial).
+2. **Suite completa:** `dotnet test Tests/EmployeeAPI.Tests.csproj` → todas las pruebas en verde (19 anteriores + las nuevas de esta mejora).
+
 ## 9. Decisiones técnicas y pendientes
 
 - Se priorizó PBKDF2 sobre BCrypt/Argon2 por no requerir dependencias externas nuevas, dado el alcance acotado de esta entrega.
 - **Se implementó una segunda mejora (sección 8.2) además de la mínima requerida**, ya que el tiempo disponible lo permitió y el challenge valora la calidad sobre la cantidad, no la cantidad mínima estricta. Se priorizó `tokenExpiration` sobre otras candidatas (CORS, PATCH, paginación) porque es la única que el propio challenge señala explícitamente como "buen candidato a corrección", y porque se pudo verificar con confianza que ningún otro código dependía del valor viejo antes de cambiarlo — el mismo nivel de cuidado que la primera mejora, no una adición apurada.
+- **Se implementó una tercera mejora (sección 8.3):** validaciones de entrada en `Employee`/`PatchEmployee`, replicando el estilo de `DataAnnotations` que ya usaba el resto del proyecto (`Device`, `Enrollment`, `PunchType`) en vez de introducir un enfoque nuevo. Efecto secundario a tener presente: `PUT /api/employee/{id}` ahora es más estricto que antes (rechaza formatos que antes aceptaba), un cambio de comportamiento intencional documentado en la sección 8.3.
 - **Pendiente:** migración de usuarios con contraseñas antiguas en texto plano (actualmente requiere recrear el usuario o la base). En un entorno real se agregaría un script de migración único, o un mecanismo transicional de "rehash en el siguiente login exitoso con texto plano".
 - **Pendiente:** documentos de `user` guardados en Mongo *antes* de la corrección de `tokenExpiration` (sección 8.2) quedan con un valor de tipo incompatible (`TimeSpan` en vez de `DateTime`); requieren una base limpia o una migración, igual que el punto anterior.
 - **Pendiente:** el resto de riesgos de la sección 7 (CORS abierto, `PATCH` inconsistente, falta de paginación, condición de carrera en email único, timezone en marcaciones) no se abordaron en esta entrega — el challenge permite explícitamente elegir mejoras acotadas en lugar de cubrir todas las recomendaciones.

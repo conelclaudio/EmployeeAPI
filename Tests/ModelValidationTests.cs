@@ -52,4 +52,85 @@ public class ModelValidationTests
 
         Assert.Contains(Validate(device), r => r.MemberNames.Contains(nameof(Device.Timezone)));
     }
+
+    [Fact]
+    public void Employee_WithRequiredFields_IsValid()
+    {
+        var employee = new Employee
+        {
+            Name = "Ana Perez",
+            Email = "ana.perez@example.com",
+            Department = "Operaciones",
+            Position = "Analista"
+        };
+
+        Assert.Empty(Validate(employee));
+    }
+
+    [Fact]
+    public void Employee_WithoutName_IsInvalid()
+    {
+        var employee = new Employee { Name = null!, Email = "ana.perez@example.com", Department = "Operaciones", Position = "Analista" };
+
+        Assert.Contains(Validate(employee), r => r.MemberNames.Contains(nameof(Employee.Name)));
+    }
+
+    [Theory]
+    [InlineData("no-es-un-email")]
+    [InlineData("falta-arroba.com")]
+    [InlineData("")]
+    public void Employee_WithInvalidEmail_IsInvalid(string email)
+    {
+        var employee = new Employee { Name = "Ana Perez", Email = email, Department = "Operaciones", Position = "Analista" };
+
+        Assert.Contains(Validate(employee), r => r.MemberNames.Contains(nameof(Employee.Email)));
+    }
+
+    [Theory]
+    [InlineData("12345678")]
+    [InlineData("1234567-8-9")]
+    [InlineData("abcdefgh-9")]
+    public void Employee_WithInvalidDni_IsInvalid(string dni)
+    {
+        var employee = new Employee { Name = "Ana Perez", Email = "ana.perez@example.com", Department = "Operaciones", Position = "Analista", Dni = dni };
+
+        Assert.Contains(Validate(employee), r => r.MemberNames.Contains(nameof(Employee.Dni)));
+    }
+
+    [Theory]
+    [InlineData("12345678-9")]
+    [InlineData("1234567-K")]
+    [InlineData("1234567-k")]
+    public void Employee_WithValidDni_IsValid(string dni)
+    {
+        var employee = new Employee { Name = "Ana Perez", Email = "ana.perez@example.com", Department = "Operaciones", Position = "Analista", Dni = dni };
+
+        Assert.Empty(Validate(employee));
+    }
+
+    [Fact]
+    public void Employee_WithoutDni_IsValid()
+    {
+        // El DNI es opcional: el empleado tambien puede identificarse por Id o PIN al marcar.
+        var employee = new Employee { Name = "Ana Perez", Email = "ana.perez@example.com", Department = "Operaciones", Position = "Analista", Dni = null };
+
+        Assert.Empty(Validate(employee));
+    }
+
+    [Fact]
+    public void PatchEmployee_WithInvalidEmail_IsInvalid()
+    {
+        var patch = new PatchEmployee { Email = "no-es-un-email" };
+
+        Assert.Contains(Validate(patch), r => r.MemberNames.Contains(nameof(PatchEmployee.Email)));
+    }
+
+    [Fact]
+    public void PatchEmployee_WithAllFieldsNull_IsValid()
+    {
+        // PATCH es una actualizacion parcial: no enviar ningun campo es valido, a diferencia de POST.
+        var patch = new PatchEmployee();
+
+        Assert.Empty(Validate(patch));
+    }
 }
